@@ -1,0 +1,17 @@
+{
+    "name": "firmino/wp-firmino",
+    "description": "WooCommerce integration with Firmino invoicing API",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "FirminoIntegration\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

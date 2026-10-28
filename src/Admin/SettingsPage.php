@@ -79,7 +79,10 @@ final class SettingsPage
         $clean = [
             'base_url'              => esc_url_raw($input['base_url'] ?? $defaults['base_url']),
             'login'                 => sanitize_text_field($input['login'] ?? ''),
-            'password'              => sanitize_text_field($input['password'] ?? ''),
+            // Passwords may contain any characters; an empty field keeps the saved one.
+            'password'              => (string) ($input['password'] ?? '') !== ''
+                ? (string) $input['password']
+                : Settings::fromOption()->password,
             'document_type'         => sanitize_text_field($input['document_type'] ?? $defaults['document_type']),
             'receipt_document_type' => sanitize_text_field($input['receipt_document_type'] ?? ''),
             'default_vat_rate'      => sanitize_text_field($input['default_vat_rate'] ?? ''),
@@ -162,11 +165,12 @@ final class SettingsPage
         $valueAttr = esc_attr($value);
 
         if ( $field === 'password' ) {
+            // Never print the stored password into the page source.
             printf(
-                '<input type="password" name="%1$s[%2$s]" value="%3$s" class="regular-text" autocomplete="new-password">',
+                '<input type="password" name="%1$s[%2$s]" value="" class="regular-text" autocomplete="new-password" placeholder="%3$s">',
                 $optionKey,
                 $fieldAttr,
-                $valueAttr,
+                $value !== '' ? esc_attr__('Zapisane — pozostaw puste, aby nie zmieniać', 'firmino-integration') : '',
             );
             return;
         }

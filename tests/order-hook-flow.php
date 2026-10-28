@@ -15,7 +15,15 @@ namespace {
     function wc_get_order(int $id): mixed { return $GLOBALS['orders'][$id] ?? null; }
     function __(string $text, string $domain = ''): string { return $text; }
     function wp_parse_args(array $args, array $defaults): array { return array_merge($defaults, $args); }
-    function get_option(string $key, mixed $default = false): mixed { return $key === 'firmino_settings' ? [] : $default; }
+    $GLOBALS['options'] = [];
+    function get_option(string $key, mixed $default = false): mixed { return $key === 'firmino_settings' ? [] : ($GLOBALS['options'][$key] ?? $default); }
+    function add_option(string $key, mixed $value, string $deprecated = '', bool $autoload = true): bool {
+        if (array_key_exists($key, $GLOBALS['options'])) { return false; }
+        $GLOBALS['options'][$key] = $value;
+        return true;
+    }
+    function update_option(string $key, mixed $value, bool $autoload = true): bool { $GLOBALS['options'][$key] = $value; return true; }
+    function delete_option(string $key): bool { unset($GLOBALS['options'][$key]); return true; }
 
     final class WC_Order {
         public array $meta = [];
@@ -27,6 +35,8 @@ namespace {
         public function update_meta_data(string $key, mixed $value): void { $this->meta[$key] = $value; }
         public function delete_meta_data(string $key): void { unset($this->meta[$key]); }
         public function save(): void { $this->saves++; }
+        public function read_meta_data(bool $force = false): void {}
+        public function get_id(): int { return $this->id; }
         public function add_order_note(string $note): void { $this->notes[] = $note; }
     }
 }
@@ -123,6 +133,15 @@ namespace {
     $awaiting = new WC_Order(6, false);
     $hooks->maybeGenerateOnStatusChange(6, 'pending', 'completed', $awaiting);
     $assert($documents->creates === 3, 'Unpaid completed order is ignored.');
+
+    $concurrent = new WC_Order(7, true);
+    $GLOBALS['options']['firmino_order_lock_7'] = time();
+    $hooks->handleOrderAction($concurrent);
+    $assert($documents->creates === 3 && $concurrent->notes === [], 'Order locked by a concurrent request is not invoiced twice.');
+    $GLOBALS['options']['firmino_order_lock_7'] = time() - 3600;
+    $hooks->handleOrderAction($concurrent);
+    $assert($documents->creates === 4, 'Stale lock from a crashed request is taken over.');
+    $assert(!isset($GLOBALS['options']['firmino_order_lock_7']), 'Lock is released after processing.');
 
     fwrite(STDOUT, sprintf("PASS: %d paid-order hook assertions.\n", $assertions));
 }

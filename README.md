@@ -19,7 +19,7 @@ Wtyczka WordPress integrująca WooCommerce z API systemu [Firmino](https://firmi
    git clone <adres-repozytorium> firmino-integration
    ```
 
-2. Zainstaluj zależności Composer:
+2. Opcjonalnie zainstaluj autoloader Composer (wtyczka nie ma zależności i bez niego ładuje klasy z `src/`):
 
    ```bash
    cd firmino-integration
@@ -38,10 +38,10 @@ Wszystkie ustawienia dostępne są w panelu **Ustawienia → Firmino**.
 |---|---|---|
 | Adres bazowy URL | Adres REST API Firmino | `https://app.firmino.pl/app/services/rest/api/` |
 | Login | Login do konta Firmino | — |
-| Hasło | Hasło do konta Firmino (HTTP Basic Auth) | — |
+| Hasło | Hasło do konta Firmino (HTTP Basic Auth). Nie jest wyświetlane w formularzu; puste pole zachowuje zapisane hasło | — |
 | Typ dokumentu | Symbol typu dokumentu sprzedaży, np. `fas` (faktura) | `fas` |
 | Typ dokumentu paragonu | Symbol dla osoby fizycznej, np. `par` — pozostaw puste, aby używać głównego typu | — |
-| Domyślna stawka VAT | Fallback stawki VAT, gdy WooCommerce zwraca wartość nieakceptowaną przez Firmino (np. `23`) | — |
+| Domyślna stawka VAT | Stawka używana, gdy WooCommerce nie nalicza podatku (stawka 0), np. `23`. Przy wyłączonych podatkach WooCommerce ceny są traktowane jako brutto | — |
 | Domyślny kod kraju | Dwuliterowy kod ISO kraju klienta | `PL` |
 | Domyślna miejscowość | Miejscowość używana, gdy klient jej nie podał | `Warszawa` |
 
@@ -85,7 +85,11 @@ Testują opłacone i nieopłacone zamówienia, produkty wirtualne, ponowienia po
 
 ### Obsługa klientów
 
-Wtyczka automatycznie wyszukuje klienta w Firmino po danych z zamówienia (NIP, e-mail, nazwa firmy). Jeśli klient nie istnieje, zostaje automatycznie utworzony. Identyfikator klienta Firmino jest cachowany w metadanych zamówienia WooCommerce.
+Dla każdego zamówienia wtyczka tworzy klienta w Firmino z danych rozliczeniowych (nazwa firmy lub imię i nazwisko, adres, e-mail, NIP). Nie wyszukuje istniejących klientów. Identyfikator klienta jest cachowany w metadanych zamówienia. NIP jest odczytywany z `_billing_nip` (checkout Biuro Natalia) lub z pól innych wtyczek; zamówienie bez NIP-u i nazwy firmy dostaje typ paragonu, jeśli został ustawiony.
+
+### Korekty
+
+API Firmino nie udostępnia wystawiania korekt. Wtyczka ich nie tworzy: korektę wystawia się ręcznie w panelu Firmino. Dlatego przed wystawieniem faktury zamówienie jest blokowane na czas jednego żądania, a zamówienie z ujemną opłatą zostaje odrzucone zamiast trafić na błędną fakturę.
 
 ## Struktura projektu
 

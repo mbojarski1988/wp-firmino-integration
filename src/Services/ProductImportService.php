@@ -9,6 +9,7 @@ use FirminoIntegration\Exceptions\ApiException;
 use FirminoIntegration\ValueObjects\ImportOptions;
 use FirminoIntegration\ValueObjects\ImportResult;
 use FirminoIntegration\ValueObjects\Settings;
+use FirminoIntegration\WooCommerce\OrderData;
 use WC_Product;
 use WC_Product_Variable;
 use WC_Tax;
@@ -115,7 +116,7 @@ final class ProductImportService
 
         $price = $product->get_price();
         if ( $price !== '' ) {
-            if ( wc_prices_include_tax() ) {
+            if ( OrderData::pricesAreGross() ) {
                 $payload['priceGross'] = wc_format_decimal(wc_get_price_including_tax($product), 2);
             } else {
                 $payload['priceNet'] = wc_format_decimal(wc_get_price_excluding_tax($product), 2);
@@ -156,8 +157,7 @@ final class ProductImportService
 
         $rate = reset($rates);
         if ( isset($rate['rate']) ) {
-            $value = rtrim(rtrim((string) $rate['rate'], '0'), '.');
-            return $value === '' ? '0' : $value;
+            return OrderData::formatRate((string) $rate['rate']);
         }
 
         return '0';

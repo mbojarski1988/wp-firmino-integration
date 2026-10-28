@@ -9,6 +9,7 @@ use FirminoIntegration\Exceptions\ApiException;
 use FirminoIntegration\Exceptions\ValidationException;
 use FirminoIntegration\ValueObjects\CustomerData;
 use FirminoIntegration\ValueObjects\Settings;
+use FirminoIntegration\WooCommerce\OrderData;
 use WC_Order;
 
 final class CustomerService
@@ -107,19 +108,7 @@ final class CustomerService
             postCode:    $order->get_billing_postcode(),
             email:       $order->get_billing_email(),
             phone:       $order->get_billing_phone(),
-            tin:         $this->getOrderTin($order) ?: null,
+            tin:         OrderData::tin($order) ?: null,
         );
-    }
-
-    private function getOrderTin(WC_Order $order): string
-    {
-        foreach ( ['billing_nip', 'billing_vat', 'vat_number', 'nip'] as $key ) {
-            $value = $order->get_meta($key, true);
-            if ( is_string($value) && trim($value) !== '' ) {
-                return trim($value);
-            }
-        }
-
-        return '';
     }
 }

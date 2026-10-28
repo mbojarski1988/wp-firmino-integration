@@ -9,7 +9,9 @@ use FirminoIntegration\Exceptions\ApiException;
 use FirminoIntegration\Exceptions\ValidationException;
 use FirminoIntegration\ValueObjects\DocumentItem;
 use FirminoIntegration\ValueObjects\Settings;
+use FirminoIntegration\WooCommerce\OrderData;
 use WC_Order;
+use WC_Order_Item_Fee;
 use WC_Order_Item_Product;
 use WC_Tax;
 
@@ -35,14 +37,16 @@ final class DocumentService
             throw new ValidationException(['Zamówienie nie ma pozycji do wysłania.']);
         }
 
-        $date = $order->get_date_created()?->date('Y-m-d') ?? gmdate('Y-m-d');
+        // The invoice is issued now; the sale happened when the order was paid.
+        $issueDate = current_time('Y-m-d');
+        $saleDate  = $order->get_date_paid()?->date('Y-m-d') ?? $issueDate;
 
         $payload = [
             'customer'     => ['id' => $customerId],
-            'documentDate' => $date,
-            'saleDate'     => $date,
+            'documentDate' => $issueDate,
+            'saleDate'     => $saleDate,
             'documentType' => $this->resolveDocumentType($order),
-            'priceType'    => wc_prices_include_tax() ? 'gross' : 'net',
+            'priceType'    => OrderData::pricesAreGross() ? 'gross' : 'net',
             'items'        => array_map(static fn(DocumentItem $i) => $i->toArray(), $items),
         ];
 
@@ -69,9 +73,10 @@ final class DocumentService
             throw new ApiException('Firmino nie zwróciło danych dokumentu przed rozliczeniem.');
         }
         $payment  = is_array($data['payment'] ?? null) ? $data['payment'] : [];
-        $remain   = (float) ($payment['remain'] ?? $payment['ramain'] ?? -1);
+        $remain   = $payment['remain'] ?? $payment['ramain'] ?? null;
         $total    = (float) ($payment['total'] ?? 0);
-        if ( ($data['documentState'] ?? '') === 'paid' || ($total > 0 && $remain <= 0) ) {
+        // A missing balance is unknown, not settled: only a reported zero balance skips payoff.
+        if ( ($data['documentState'] ?? '') === 'paid' || ($total > 0 && $remain !== null && (float) $remain <= 0) ) {
             return;
         }
 
@@ -112,11 +117,14 @@ final class DocumentService
 
             $lineTotal = (float) $item->get_total();
             $lineTax   = (float) $item->get_total_tax();
-            $price     = wc_prices_include_tax()
+            $price     = OrderData::pricesAreGross()
                 ? ($lineTotal + $lineTax) / $quantity
                 : $lineTotal / $quantity;
 
             $vatRate = $this->resolveVatRate($this->getItemVatRate($item));
+            // Match ProductImportService: virtual and downloadable products are services.
+            $product = $item->get_product();
+            $isService = $product && ($product->is_virtual() || $product->is_downloadable());
 
             $items[] = new DocumentItem(
                 name:        $item->get_name(),
@@ -124,14 +132,14 @@ final class DocumentService
                 vatRate:     $vatRate,
                 price:       wc_format_decimal($price, 2),
                 quantity:    wc_format_decimal($quantity, 4),
-                articleType: 'good',
+                articleType: $isService ? 'service' : 'good',
             );
         }
 
         $shippingTotal = (float) $order->get_shipping_total();
         if ( $shippingTotal > 0 ) {
             $shippingTax = (float) $order->get_shipping_tax();
-            $price       = wc_prices_include_tax()
+            $price       = OrderData::pricesAreGross()
                 ? $shippingTotal + $shippingTax
                 : $shippingTotal;
 
@@ -147,7 +155,43 @@ final class DocumentService
             );
         }
 
+        foreach ( $order->get_items('fee') as $fee ) {
+            if ( ! $fee instanceof WC_Order_Item_Fee ) {
+                continue;
+            }
+
+            $feeTotal = (float) $fee->get_total();
+            if ( $feeTotal == 0.0 ) {
+                continue;
+            }
+            if ( $feeTotal < 0 ) {
+                // A wrong invoice cannot be corrected through the API, so stop before issuing one.
+                throw new ValidationException([sprintf('Zamówienie zawiera ujemną opłatę „%s”, której Firmino nie przyjmie jako pozycji.', $fee->get_name())]);
+            }
+
+            $price = OrderData::pricesAreGross() ? $feeTotal + (float) $fee->get_total_tax() : $feeTotal;
+
+            $items[] = new DocumentItem(
+                name:        $fee->get_name(),
+                unit:        'usl',
+                vatRate:     $this->resolveVatRate($this->getTaxesVatRate($fee->get_taxes())),
+                price:       wc_format_decimal($price, 2),
+                quantity:    wc_format_decimal(1, 4),
+                articleType: 'service',
+            );
+        }
+
         return $items;
+    }
+
+    private function getTaxesVatRate(array $taxes): string
+    {
+        if ( ! empty($taxes['total']) && is_array($taxes['total']) ) {
+            $rateIds = array_keys($taxes['total']);
+            return $this->formatTaxRate((string) reset($rateIds));
+        }
+
+        return '0';
     }
 
     private function resolveDocumentType(WC_Order $order): string
@@ -166,41 +210,20 @@ final class DocumentService
             return false;
         }
 
-        return $this->getOrderTin($order) === '';
-    }
-
-    private function getOrderTin(WC_Order $order): string
-    {
-        foreach ( ['billing_nip', 'billing_vat', 'vat_number', 'nip'] as $key ) {
-            $value = $order->get_meta($key, true);
-            if ( is_string($value) && trim($value) !== '' ) {
-                return trim($value);
-            }
-        }
-
-        return '';
+        return OrderData::tin($order) === '';
     }
 
     private function getItemVatRate(WC_Order_Item_Product $item): string
     {
-        $taxes  = $item->get_taxes();
-        $rateId = '';
-
-        if ( ! empty($taxes['total']) && is_array($taxes['total']) ) {
-            $rateIds = array_keys($taxes['total']);
-            $rateId  = (string) reset($rateIds);
-        }
-
-        return $this->formatTaxRate($rateId);
+        return $this->getTaxesVatRate($item->get_taxes());
     }
 
     private function getShippingVatRate(WC_Order $order): string
     {
         foreach ( $order->get_items('shipping') as $item ) {
-            $taxes = $item->get_taxes();
-            if ( ! empty($taxes['total']) && is_array($taxes['total']) ) {
-                $rateIds = array_keys($taxes['total']);
-                return $this->formatTaxRate((string) reset($rateIds));
+            $rate = $this->getTaxesVatRate($item->get_taxes());
+            if ( $rate !== '0' ) {
+                return $rate;
             }
         }
 
@@ -213,11 +236,7 @@ final class DocumentService
             return '0';
         }
 
-        $rate = WC_Tax::get_rate_percent($rateId);
-        $rate = str_replace('%', '', (string) $rate);
-        $rate = rtrim(rtrim($rate, '0'), '.');
-
-        return $rate === '' ? '0' : $rate;
+        return OrderData::formatRate((string) WC_Tax::get_rate_percent($rateId));
     }
 
     private function resolveVatRate(string $rate): string

@@ -13,6 +13,8 @@ use WC_Order;
 
 final class OrderHooks
 {
+    private const LOCK_SECONDS = 300;
+
     private bool $customerLinkRendered = false;
 
     public function __construct(
@@ -42,7 +44,19 @@ final class OrderHooks
 
     public function handleOrderAction(WC_Order $order): void
     {
+        // A gateway callback and the customer's return page can process one payment concurrently.
+        // Issued invoices cannot be corrected through the API, so only one request may issue it.
+        $lock = 'firmino_order_lock_' . $order->get_id();
+        if ( ! add_option($lock, time(), '', false) ) {
+            if ( (int) get_option($lock) > time() - self::LOCK_SECONDS ) {
+                return;
+            }
+            update_option($lock, time(), false);
+        }
+
         try {
+            // Another request may have issued the invoice after this order object was loaded.
+            $order->read_meta_data(true);
             $this->processOrder($order);
         } catch ( FirminoException $e ) {
             $documentId = (int) $order->get_meta('_firmino_document_id', true);
@@ -55,6 +69,8 @@ final class OrderHooks
                 )
                 : sprintf('Błąd Firmino: %s', $e->getMessage());
             $order->add_order_note($message);
+        } finally {
+            delete_option($lock);
         }
     }
 

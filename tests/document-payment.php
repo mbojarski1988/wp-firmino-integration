@@ -64,6 +64,11 @@ namespace {
         $assert(count($missingClient->requests) === 1, 'Missing or mismatched document identity never triggers payoff.');
     }
 
+    $unknownBalanceClient = new FakeHttpClient();
+    $unknownBalanceClient->responses = [$document(['documentState' => 'new', 'payment' => ['total' => '20.00']]), ['success' => true]];
+    (new DocumentService($unknownBalanceClient, Settings::fromOption()))->markPaid(81);
+    $assert(count($unknownBalanceClient->requests) === 2, 'Unpaid invoice without a reported balance is still settled.');
+
     $invalidClient = new FakeHttpClient();
     try {
         (new DocumentService($invalidClient, Settings::fromOption()))->markPaid(0);

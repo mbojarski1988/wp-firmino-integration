@@ -31,11 +31,12 @@ final class OrderHooks
         add_filter('woocommerce_admin_order_actions', [$this, 'addAdminListAction'], 10, 2);
         add_filter('woocommerce_my_account_my_orders_actions', [$this, 'addCustomerListAction'], 10, 2);
         add_action('woocommerce_order_status_changed', [$this, 'maybeGenerateOnStatusChange'], 10, 4);
+        add_action('woocommerce_payment_complete', [$this, 'maybeGenerateOnPaymentComplete'], 10, 1);
     }
 
     public function addOrderAction(array $actions): array
     {
-        $actions['firmino_send'] = __('Wyślij do Firmino', 'firmino-integration');
+        $actions['firmino_send'] = __('Wystaw fakturę w Firmino', 'firmino-integration');
         return $actions;
     }
 
@@ -44,18 +45,44 @@ final class OrderHooks
         try {
             $this->processOrder($order);
         } catch ( FirminoException $e ) {
-            $order->add_order_note(sprintf('Błąd Firmino: %s', $e->getMessage()));
+            $documentId = (int) $order->get_meta('_firmino_document_id', true);
+            $paymentPending = $order->get_meta('_firmino_document_payment_pending', true) === 'yes';
+            $message = $documentId > 0 && $paymentPending
+                ? sprintf(
+                    'Faktura Firmino (ID %d) istnieje, ale rejestracja płatności nie powiodła się: %s. Użyj akcji „Wystaw fakturę w Firmino”, aby ponowić.',
+                    $documentId,
+                    $e->getMessage(),
+                )
+                : sprintf('Błąd Firmino: %s', $e->getMessage());
+            $order->add_order_note($message);
         }
     }
 
     public function maybeGenerateOnStatusChange(int $orderId, string $oldStatus, string $newStatus, WC_Order $order): void
     {
-        if ( $newStatus !== 'processing' && $newStatus !== 'w-trakcie-realizacji' ) {
+        if ( ! in_array($newStatus, ['processing', 'completed', 'w-trakcie-realizacji'], true) || ! $order->is_paid() ) {
             return;
         }
 
-        $documentId = $order->get_meta('_firmino_document_id', true);
-        if ( ! empty($documentId) ) {
+        $this->handleOrderAction($order);
+    }
+
+    /**
+     * Runs for paid orders that jump directly to completed, such as downloadable products.
+     *
+     * WooCommerce also triggers a status change while completing most payments. The stored
+     * document ID makes this second hook idempotent for sequential calls.
+     */
+    public function maybeGenerateOnPaymentComplete(int $orderId): void
+    {
+        $order = wc_get_order($orderId);
+        if ( ! $order instanceof WC_Order || ! $order->is_paid() ) {
+            return;
+        }
+
+        $documentId = (int) $order->get_meta('_firmino_document_id', true);
+        $paymentPending = $order->get_meta('_firmino_document_payment_pending', true);
+        if ( $documentId > 0 && $paymentPending !== 'yes' ) {
             return;
         }
 
@@ -199,29 +226,50 @@ final class OrderHooks
 
     private function processOrder(WC_Order $order, bool $retried = false): void
     {
-        $customerId = $this->customerService->resolveForOrder($order);
+        if ( ! $order->is_paid() ) {
+            throw new FirminoException('Nie wystawiono faktury — zamówienie nie jest opłacone.');
+        }
 
-        try {
-            $result = $this->documentService->createFromOrder($order, $customerId);
-        } catch ( ApiException $e ) {
-            $body    = $e->getResponseBody();
-            $message = is_array($body) ? (string) ($body['response'] ?? '') : '';
+        $documentId = (int) $order->get_meta('_firmino_document_id', true);
+        if ( $documentId <= 0 ) {
+            $customerId = $this->customerService->resolveForOrder($order);
 
-            if ( ! $retried && str_contains($message, 'Nie znaleziono obiektu o id=') ) {
-                $this->customerService->clearCachedId($order);
-                $this->processOrder($order, retried: true);
-                return;
+            try {
+                $result = $this->documentService->createFromOrder($order, $customerId);
+            } catch ( ApiException $e ) {
+                $body    = $e->getResponseBody();
+                $message = is_array($body) ? (string) ($body['response'] ?? '') : '';
+
+                if ( ! $retried && str_contains($message, 'Nie znaleziono obiektu o id=') ) {
+                    $this->customerService->clearCachedId($order);
+                    $this->processOrder($order, retried: true);
+                    return;
+                }
+
+                throw $e;
             }
 
-            throw $e;
+            $documentId = (int) $result['id'];
+            if ( $documentId <= 0 ) {
+                throw new FirminoException('Firmino nie zwróciło ID wystawionej faktury. Sprawdź dokumenty w panelu Firmino przed ponowieniem.');
+            }
+
+            // Persist the ID before recording payment so retries cannot issue another invoice.
+            $order->update_meta_data('_firmino_document_id', $documentId);
+            $order->update_meta_data('_firmino_document_number', $result['number']);
+            $order->update_meta_data('_firmino_document_payment_pending', 'yes');
+            $order->save();
+            $order->add_order_note(sprintf('Faktura Firmino utworzona (%s). Rejestruję płatność.', $result['number'] ?: 'ID ' . $documentId));
+        } elseif ( $order->get_meta('_firmino_document_payment_pending', true) !== 'yes' ) {
+            // Do not alter documents created by an earlier plugin version or paid manually in Firmino.
+            return;
         }
 
-        if ( $result['id'] > 0 ) {
-            $order->update_meta_data('_firmino_document_id', $result['id']);
-            $order->update_meta_data('_firmino_document_number', $result['number']);
-            $order->save();
-            $order->add_order_note(sprintf('Dokument Firmino utworzony (ID %s).', $result['id']));
-        }
+        $this->documentService->markPaid($documentId);
+
+        $order->delete_meta_data('_firmino_document_payment_pending');
+        $order->save();
+        $order->add_order_note(sprintf('Płatność do faktury Firmino (ID %d) została zarejestrowana.', $documentId));
     }
 
     private function getDownloadUrl(WC_Order $order): string

@@ -50,8 +50,32 @@ final class DocumentService
 
         return [
             'id'     => (int) ($response['response']['id'] ?? 0),
-            'number' => (string) ($response['response']['number'] ?? ''),
+            'number' => (string) ($response['response']['number'] ?? $response['response']['documentName'] ?? ''),
         ];
+    }
+
+    /** Mark a Firmino document as fully paid after the WooCommerce payment succeeds. */
+    public function markPaid(int $documentId): void
+    {
+        if ( $documentId <= 0 ) {
+            throw new ValidationException(['Nieprawidłowe ID dokumentu.']);
+        }
+
+        // A previous request may have reached Firmino even if the HTTP response was lost.
+        // Read its current state first so retrying a paid order never registers payment twice.
+        $document = $this->client->request("sale-documents/get/{$documentId}");
+        $data     = $document['response'] ?? [];
+        if ( ! is_array($data) ) {
+            throw new ApiException('Firmino nie zwróciło danych dokumentu przed rozliczeniem.');
+        }
+        $payment  = is_array($data) && is_array($data['payment'] ?? null) ? $data['payment'] : [];
+        $remain   = (float) ($payment['remain'] ?? $payment['ramain'] ?? -1);
+        $total    = (float) ($payment['total'] ?? 0);
+        if ( ($data['documentState'] ?? '') === 'paid' || ($total > 0 && $remain <= 0) ) {
+            return;
+        }
+
+        $this->client->request("sale-documents/payoff/{$documentId}");
     }
 
     /**

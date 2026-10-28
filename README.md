@@ -51,11 +51,11 @@ Po zapisaniu ustawień użyj przycisku **Testuj połączenie**, aby sprawdzić p
 
 ### Automatyczne generowanie dokumentów
 
-Dokument w Firmino jest tworzony automatycznie, gdy zamówienie WooCommerce zmienia status na **W trakcie realizacji** (`processing` lub `w-trakcie-realizacji`). Jeśli zamówienie ma już przypisany dokument, ponowne generowanie jest pomijane.
+Faktura w Firmino jest tworzona automatycznie po opłaceniu zamówienia. Integracja reaguje na standardowy hook płatności WooCommerce oraz na przejście do statusu `processing` lub `completed` i sprawdza `WC_Order::is_paid()`. Obsługuje także produkty wirtualne, które po płatności przechodzą bezpośrednio do `completed`. Dokument zostaje następnie oznaczony jako opłacony w Firmino. ID faktury zapisujemy w zamówieniu przed rozliczeniem, a ponowienie po błędzie najpierw odczytuje status dokumentu, aby nie zaksięgować płatności drugi raz. Nieopłaconego zamówienia nie można wysłać ręczną akcją.
 
 ### Ręczne wysyłanie zamówienia
 
-W widoku szczegółów zamówienia dostępna jest akcja **Wyślij do Firmino** (panel *Akcje zamówienia*), która pozwala ręcznie wywołać generowanie dokumentu.
+W widoku szczegółów zamówienia dostępna jest akcja **Wystaw fakturę w Firmino** (panel *Akcje zamówienia*). Może służyć do ponowienia wystawienia faktury lub jej rozliczenia po błędzie API; jest dostępna dla już opłaconego zamówienia.
 
 ### Pobieranie dokumentu PDF
 

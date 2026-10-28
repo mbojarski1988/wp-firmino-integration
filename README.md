@@ -73,6 +73,16 @@ Strona **WooCommerce → Import do Firmino** umożliwia masowy import produktów
 - wybór źródła kodu artykułu (SKU produktu lub ID WooCommerce),
 - paginację wsadową.
 
+### Testy
+
+Testy przepływu wystawiania i rozliczania faktur uruchomisz bez WooCommerce i bez dostępu do konta Firmino:
+
+```bash
+php tests/run.php
+```
+
+Testują opłacone i nieopłacone zamówienia, produkty wirtualne, ponowienia po błędzie API oraz pomijanie dokumentów już rozliczonych. Klient HTTP jest zastępowany atrapą; żaden test nie tworzy dokumentu w Firmino.
+
 ### Obsługa klientów
 
 Wtyczka automatycznie wyszukuje klienta w Firmino po danych z zamówienia (NIP, e-mail, nazwa firmy). Jeśli klient nie istnieje, zostaje automatycznie utworzony. Identyfikator klienta Firmino jest cachowany w metadanych zamówienia WooCommerce.

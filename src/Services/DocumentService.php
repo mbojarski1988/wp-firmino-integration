@@ -64,11 +64,11 @@ final class DocumentService
         // A previous request may have reached Firmino even if the HTTP response was lost.
         // Read its current state first so retrying a paid order never registers payment twice.
         $document = $this->client->request("sale-documents/get/{$documentId}");
-        $data     = $document['response'] ?? [];
-        if ( ! is_array($data) ) {
+        $data     = $document['response'] ?? null;
+        if ( ! is_array($data) || (int) ($data['id'] ?? 0) !== $documentId ) {
             throw new ApiException('Firmino nie zwróciło danych dokumentu przed rozliczeniem.');
         }
-        $payment  = is_array($data) && is_array($data['payment'] ?? null) ? $data['payment'] : [];
+        $payment  = is_array($data['payment'] ?? null) ? $data['payment'] : [];
         $remain   = (float) ($payment['remain'] ?? $payment['ramain'] ?? -1);
         $total    = (float) ($payment['total'] ?? 0);
         if ( ($data['documentState'] ?? '') === 'paid' || ($total > 0 && $remain <= 0) ) {
